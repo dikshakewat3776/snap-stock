@@ -84,6 +84,71 @@ git remote add origin <your-github-repo-url>
 git push -u origin main
 ```
 
+### LiveReview (`lrc`) — setup
+
+LiveReview is a separate CLI that can gate Git commits with an AI review attestation. This repo does **not** ship the hook; it is installed on your machine (often globally).
+
+**Official site:** [https://livereview.hexmos.com/](https://livereview.hexmos.com/)
+
+1. **Install or update the CLI** (if `lrc` is not on your `PATH`):
+   ```bash
+   # If you already have lrc:
+   lrc self-update
+   ```
+   Follow your team’s install path if different (some setups use a package manager or `~/.local/bin`).
+
+2. **First-time configuration** (auth + AI / API settings):
+   ```bash
+   lrc setup
+   ```
+   Complete the prompts (Hexmos / LiveReview + AI as directed).
+
+3. **Install Git hook dispatchers** (once per machine; uses Git’s `core.hooksPath`):
+   ```bash
+   lrc hooks install
+   ```
+
+4. **Enable hooks for this repository** (from this project’s root):
+   ```bash
+   lrc hooks enable
+   lrc hooks status
+   ```
+   To turn LiveReview off **only for this repo**:
+   ```bash
+   lrc hooks disable
+   ```
+   To remove dispatchers entirely:
+   ```bash
+   lrc hooks uninstall
+   ```
+
+### LiveReview — usage in this project
+
+Typical flow when hooks are enabled:
+
+1. Stage your changes: `git add …`
+2. Run a review on what you staged:
+   ```bash
+   lrc review --staged
+   ```
+3. Commit: `git commit -m "…"`  
+   If the hook still complains, use one of the options below.
+
+**Options when you need attestation without a full review** (only if your team allows):
+
+| Situation | Command |
+|-----------|---------|
+| Skip review, record attestation locally | `lrc review --staged --skip` |
+| Vouch manually (no full AI review) | `lrc review --staged --vouch` |
+
+**If commit fails with `review attestation missing`**
+
+Run one of the review commands above, then commit again. Emergency bypass (may violate org policy):
+
+```bash
+git commit --no-verify -m "Your message"
+```
+
 ## Validation
 ```bash
 npm run typecheck
@@ -156,12 +221,45 @@ console.log("[DEBUG] sync queue item:", item);
 
 ## 6) TypeScript quick cheat sheet
 
-- `type` / `interface`: describes data shape
-- `Promise<T>`: async function returns `T` later
-- `| null`: value may be empty
-- `private readonly`: class property cannot be reassigned outside constructor
+**Types and values**
 
-Ignore advanced syntax initially; trace runtime values with logs.
+- `type` / `interface`: describes the shape of an object or value (fields and their types).
+- `string` / `number` / `boolean`: primitive types; use them so the compiler catches mistakes early.
+- `|`: union — “this value is one of these types,” e.g. `string | number`.
+- `| null` / `| undefined`: value may be missing; forces you to check before using it safely.
+- `?` on a property: optional — the field may be absent, e.g. `{ name?: string }`.
+- `readonly`: property cannot be reassigned after creation (immutability hint).
+
+**Functions**
+
+- `(a: string) => number`: function type — takes a string, returns a number.
+- `async function` / `async () => {}`: always returns a `Promise`; use `await` to get the result.
+- `Promise<T>`: a value that will resolve to type `T` later (typical for network, timers, files).
+- `void`: function returns nothing useful.
+
+**Objects and APIs**
+
+- `obj?.field` / `obj?.method?.()`: optional chaining — if `obj` is `null`/`undefined`, the whole expression is `undefined` instead of crashing.
+- `value ?? defaultValue`: nullish coalescing — use `defaultValue` when `value` is `null` or `undefined`.
+- `as Type`: tell the compiler to treat a value as `Type`; use sparingly — you are taking responsibility if it is wrong.
+
+**Arrays and generics**
+
+- `T[]` / `Array<T>`: array of items of type `T`.
+- `Map<K, V>` / `Set<T>`: typed collections; `K`, `V`, `T` are placeholders (generics).
+
+**Classes (when you see them)**
+
+- `public` / `private` / `protected`: who can see or call a member.
+- `private readonly`: class property cannot be reassigned outside the constructor.
+
+**This repo**
+
+- Run `npm run typecheck` to verify types without changing files.
+
+**Reference**
+
+- [TypeScript cheatsheets](https://www.typescriptlang.org/cheatsheets/) — printable PDFs from the TypeScript team.
 
 ## 7) Fast recovery checklist
 
