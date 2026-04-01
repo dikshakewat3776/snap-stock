@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "strict": true,
+    "types": ["jest", "node"]
+  },
+  "include": ["server/**/*.ts", "src/domain/services/**/*.ts", "src/shared/**/*.ts", "src/tests/**/*.ts", "src/seed/**/*.ts"]
+}
