@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Inventory Scanner - Web Portal</title>
+  <title>Smart Inventory Scanner</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 24px; background: #f5f7fb; color: #111; }
     .card { background: white; border-radius: 10px; padding: 16px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
@@ -13,77 +13,60 @@
   </style>
 </head>
 <body>
-  <h1>Smart Inventory Scanner (Web)</h1>
-
+  <h1>Smart Inventory Scanner</h1>
+  <!-- Upload Shelf Image -->
   <div class="card">
     <h3>1) Upload Shelf Image</h3>
-    <input id="image" type="file" accept="image/*" />
+    <input id="image" type="file" accept="image/*" multiple />
     <button id="scanBtn">Scan</button>
     <pre id="scanOut">No scan yet.</pre>
-    <button id="confirmBtn">Confirm & Update Inventory</button>
+    <button id="confirmBtn">Confirm Scan</button>
   </div>
 
-  <div class="card">
-    <h3>2) Inventory</h3>
-    <button id="refreshInventory">Refresh Inventory</button>
-    <pre id="inventoryOut"></pre>
-  </div>
-
-  <div class="card">
-    <h3>3) Alerts + Reorder</h3>
-    <button id="alertsBtn">Load Alerts</button>
-    <button id="reorderBtn">Load Reorder</button>
-    <button id="exportBtn">Export Text</button>
-    <pre id="alertsOut"></pre>
-  </div>
-
+  <!-- Scripts -->
   <script>
     let lastScan = null;
+    // DOM Elements to store the output of the buttons
+    // getElementById is used to get the element by its id
+    // scanOut is used to store the output of the scan button
     const scanOut = document.getElementById("scanOut");
-    const inventoryOut = document.getElementById("inventoryOut");
-    const alertsOut = document.getElementById("alertsOut");
 
-    async function loadInventory() {
-      const res = await fetch("/api/inventory");
-      inventoryOut.textContent = JSON.stringify(await res.json(), null, 2);
-    }
-
+    // Scan Button to scan the image and get the output 
+    // onclick is used to add a click event listener to the button
+    // async is used to make the function asynchronous
+    // file is used to store the image file
+    // form is used to create a form data object to send the image file to the server
+    // append is used to append the image file to the form data
+    // fetch is used to fetch the scan from the server with the method POST and the body is the form data
+    // lastScan is used to store the last scan
+    // scanOut.textContent is used to store the output of the scan button in the HTML
     document.getElementById("scanBtn").onclick = async () => {
-      const file = document.getElementById("image").files[0];
-      if (!file) return alert("Please choose an image first.");
+      const files = document.getElementById("image").files;
+      if (!files || files.length === 0) return alert("Please choose at least one image first.");
+      if (files.length > 10) return alert("Please upload up to 10 images at once.");
       const form = new FormData();
-      form.append("image", file);
+      for (let i = 0; i < files.length; i++) {
+        form.append("image", files[i]);
+      }
       const res = await fetch("/api/scan", { method: "POST", body: form });
       lastScan = await res.json();
       scanOut.textContent = JSON.stringify(lastScan, null, 2);
     };
 
+    // Confirm Button to confirm the scan
+    // if (!lastScan) is used to check if the last scan is not null
+    // fetch is used to fetch the confirm scan from the server with the method POST and the body is the last scan
     document.getElementById("confirmBtn").onclick = async () => {
       if (!lastScan) return alert("Run scan first.");
-      await fetch("/api/confirm-scan", {
+      const res = await fetch("/api/confirm-scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(lastScan),
       });
-      await loadInventory();
-      alert("Inventory updated.");
+      const result = await res.json();
+      scanOut.textContent = JSON.stringify({ ...lastScan, confirm: result }, null, 2);
+      alert("Scan confirmed.");
     };
-
-    document.getElementById("refreshInventory").onclick = loadInventory;
-    document.getElementById("alertsBtn").onclick = async () => {
-      const res = await fetch("/api/alerts");
-      alertsOut.textContent = JSON.stringify(await res.json(), null, 2);
-    };
-    document.getElementById("reorderBtn").onclick = async () => {
-      const res = await fetch("/api/reorder");
-      alertsOut.textContent = JSON.stringify(await res.json(), null, 2);
-    };
-    document.getElementById("exportBtn").onclick = async () => {
-      const text = await (await fetch("/api/export/text")).text();
-      alertsOut.textContent = text;
-    };
-
-    loadInventory();
   </script>
 </body>
 </html>

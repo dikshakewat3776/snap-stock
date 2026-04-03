@@ -4,9 +4,20 @@ import multer from "multer";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
-import { generateLowStockAlerts, generateReorderSuggestions } from "../src/domain/services/inventoryRules";
 import { InventoryItem } from "../src/shared/types/contracts";
 
+// We define the type DetectionResponse at the top of the file to avoid duplication
+// DetectionResponse is the response from the detection API
+// scan_id is the id of the scan
+// captured_at is the timestamp of the scan
+// detections is the array of detections
+// aggregated_items is the array of aggregated items
+// product_name is the name of the product
+// brand is the brand of the product
+// quantity is the quantity of the product
+// confidence is the confidence of the detection
+// bbox is the bounding box of the detection
+// avg_confidence is the average confidence of the detections
 type DetectionResponse = {
   scan_id: string;
   captured_at: string;
@@ -25,13 +36,66 @@ type DetectionResponse = {
   }>;
 };
 
+/**
+ * One shared prompt/schema for all providers.
+ *
+ * We rely on the model to return STRICT JSON matching this shape:
+ * - `detections`: raw per-item detections including bbox + confidence
+ * - `aggregated_items`: per-product rollups (used by `/api/confirm-scan`)
+ */
+const DETECTION_PROMPT = (() => {
+  const schema = `{
+  "scan_id": "string",
+  "captured_at": "ISO timestamp",
+  "detections": [
+    {
+      "product_name": "string",
+      "brand": "string",
+      "quantity": number,
+      "confidence": number,
+      "bbox": [number, number, number, number]
+    }
+  ],
+  "aggregated_items": [
+    {
+      "product_name": "string",
+      "brand": "string",
+      "quantity": number,
+      "avg_confidence": number
+    }
+  ]
+}`;
+
+  const rules = `- Use normalized bbox values 0..1 as [x,y,width,height].
+- quantity must be integer >= 1.
+- confidence and avg_confidence must be 0..1.
+- If unsure, use lower confidence.
+- Return only JSON, no markdown.`;
+
+  return `Analyze this store shelf image and return strict JSON only.
+Schema:
+${schema}
+Rules:
+${rules}`;
+})();
+
+// We create the app using express
 const app = express();
+
+// We create the upload directory
 const uploadDir = path.join(process.cwd(), "uploads");
+// We create the data directory
 const dataDir = path.join(process.cwd(), "data");
+// We create the data path
 const dataPath = path.join(dataDir, "inventory.json");
+// We create the upload index path
 const uploadIndexPath = path.join(dataDir, "upload-index.json");
+// We create the logs directory
 const logsDir = path.join(process.cwd(), "logs");
 
+
+
+// We load the environment file
 function loadEnvFile() {
   const envPath = path.join(process.cwd(), ".env");
   if (!fs.existsSync(envPath)) return;
@@ -221,20 +285,7 @@ async function scanWithOpenAI(
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
   const model = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
-  const prompt = `Analyze this store shelf image and return strict JSON only.
-Schema:
-{
-  "scan_id": "string",
-  "captured_at": "ISO timestamp",
-  "detections": [{"product_name":"string","brand":"string","quantity":number,"confidence":number,"bbox":[number,number,number,number]}],
-  "aggregated_items": [{"product_name":"string","brand":"string","quantity":number,"avg_confidence":number}]
-}
-Rules:
-- Use normalized bbox values 0..1 as [x,y,width,height].
-- quantity must be integer >= 1.
-- confidence and avg_confidence must be 0..1.
-- If unsure, use lower confidence.
-- Return only JSON, no markdown.`;
+  const prompt = DETECTION_PROMPT;
 
   const response = await fetchWithLogging(
     "https://api.openai.com/v1/responses",
@@ -276,20 +327,7 @@ async function scanWithGemini(
   const modelsToTry = configuredModel
     ? [configuredModel]
     : ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest"];
-  const prompt = `Analyze this store shelf image and return strict JSON only.
-Schema:
-{
-  "scan_id": "string",
-  "captured_at": "ISO timestamp",
-  "detections": [{"product_name":"string","brand":"string","quantity":number,"confidence":number,"bbox":[number,number,number,number]}],
-  "aggregated_items": [{"product_name":"string","brand":"string","quantity":number,"avg_confidence":number}]
-}
-Rules:
-- Use normalized bbox values 0..1 as [x,y,width,height].
-- quantity must be integer >= 1.
-- confidence and avg_confidence must be 0..1.
-- If unsure, use lower confidence.
-- Return only JSON, no markdown.`;
+  const prompt = DETECTION_PROMPT;
 
   let lastError = "Gemini request failed";
   for (const model of modelsToTry) {
@@ -337,20 +375,7 @@ async function scanWithOllama(
   const model = process.env.OLLAMA_MODEL ?? "llava:latest";
   const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/+$/, "");
   const apiKey = process.env.OLLAMA_API_KEY;
-  const prompt = `Analyze this store shelf image and return strict JSON only.
-Schema:
-{
-  "scan_id": "string",
-  "captured_at": "ISO timestamp",
-  "detections": [{"product_name":"string","brand":"string","quantity":number,"confidence":number,"bbox":[number,number,number,number]}],
-  "aggregated_items": [{"product_name":"string","brand":"string","quantity":number,"avg_confidence":number}]
-}
-Rules:
-- Use normalized bbox values 0..1 as [x,y,width,height].
-- quantity must be integer >= 1.
-- confidence and avg_confidence must be 0..1.
-- If unsure, use lower confidence.
-- Return only JSON, no markdown.`;
+  const prompt = DETECTION_PROMPT;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -396,20 +421,7 @@ async function scanWithGrok(
   if (!apiKey) throw new Error("GROK_API_KEY is not configured");
   const baseUrl = (process.env.GROK_BASE_URL ?? "https://api.x.ai/v1").replace(/\/+$/, "");
   const model = process.env.GROK_MODEL ?? "grok-2-vision-latest";
-  const prompt = `Analyze this store shelf image and return strict JSON only.
-Schema:
-{
-  "scan_id": "string",
-  "captured_at": "ISO timestamp",
-  "detections": [{"product_name":"string","brand":"string","quantity":number,"confidence":number,"bbox":[number,number,number,number]}],
-  "aggregated_items": [{"product_name":"string","brand":"string","quantity":number,"avg_confidence":number}]
-}
-Rules:
-- Use normalized bbox values 0..1 as [x,y,width,height].
-- quantity must be integer >= 1.
-- confidence and avg_confidence must be 0..1.
-- If unsure, use lower confidence.
-- Return only JSON, no markdown.`;
+  const prompt = DETECTION_PROMPT;
 
   const response = await fetchWithLogging(
     `${baseUrl}/chat/completions`,
@@ -456,6 +468,13 @@ Rules:
 
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
+/**
+ * Middleware that:
+ * - assigns `applicationId` and `requestId` for correlation
+ * - logs *every* incoming request + outgoing response into `logs/YYYY-MM-DD.log`
+ *
+ * This is useful when debugging AI-provider failures (rate limits, TLS issues, etc.).
+ */
 app.use((req, res, next) => {
   const applicationId = req.header("x-application-id") || `app_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
   const requestId = `req_${Date.now()}_${crypto.randomUUID().slice(0, 6)}`;
@@ -506,64 +525,92 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/api/inventory", (_req, res) => {
-  res.json(readInventory());
-});
-
-app.post("/api/scan", upload.single("image"), async (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: "Missing image file" });
-  }
+/**
+ * POST `/api/scan`
+ *
+ * Purpose:
+ * - Accept 1..10 shelf images in a single multipart request (field name: `image`)
+ * - For each file, call the configured AI provider (OpenAI/Gemini/Ollama/Grok)
+ * - Return detection results using the shared `DetectionResponse` JSON contract.
+ *
+ * Response:
+ * - If you upload exactly 1 image: returns a single detection object.
+ * - If you upload multiple images: returns `{ scans: [ ... ] }`.
+ *
+ * Note: Uploads are persisted into `uploads/` and tracked in `data/upload-index.json`.
+ */
+app.post("/api/scan", upload.array("image", 10), async (req, res) => {
+  const files = (req.files ?? []) as Express.Multer.File[];
+  if (!files.length) return res.status(400).json({ error: "Missing image file(s)" });
 
   const appReq = req as express.Request & { applicationId?: string; requestId?: string };
-  const applicationId = appReq.applicationId ?? `app_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
-  const uploadedAt = new Date().toISOString();
-  const datePrefix = uploadedAt.slice(0, 10);
-  const safeOriginalName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const finalFileName = `${datePrefix}_${applicationId}_${safeOriginalName || req.file.filename}`;
-  const finalPath = path.join(uploadDir, finalFileName);
-  fs.renameSync(req.file.path, finalPath);
-  const uploadRecord: UploadRecord = {
-    applicationId,
-    uploadedAt,
-    filePath: finalPath,
-    fileName: finalFileName,
-    originalName: req.file.originalname,
-    mimeType: req.file.mimetype || "application/octet-stream",
-    size: req.file.size,
-  };
-  const existing = readUploadIndex();
-  saveUploadIndex([uploadRecord, ...existing].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)));
+  const requestApplicationId = appReq.applicationId ?? `app_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
+  const requestId = appReq.requestId;
 
   const provider = (process.env.AI_PROVIDER ?? "").toLowerCase();
-  const mimeType = req.file.mimetype || "image/jpeg";
-  const base64Image = fs.readFileSync(finalPath).toString("base64");
 
   try {
-    let result: DetectionResponse;
-    if (provider === "grok" || (!provider && process.env.GROK_API_KEY)) {
-      result = await scanWithGrok(base64Image, mimeType, { requestId: appReq.requestId, applicationId });
-    } else if (provider === "ollama" || (!provider && process.env.OLLAMA_API_KEY)) {
-      result = await scanWithOllama(base64Image, mimeType, { requestId: appReq.requestId, applicationId });
-    } else if (provider === "openai" || (!provider && process.env.OPENAI_API_KEY)) {
-      result = await scanWithOpenAI(base64Image, mimeType, { requestId: appReq.requestId, applicationId });
-    } else if (provider === "gemini" || process.env.GEMINI_API_KEY) {
-      result = await scanWithGemini(base64Image, mimeType, { requestId: appReq.requestId, applicationId });
-    } else {
-      return res.status(500).json({
-        error:
-          "No AI provider configured. Set AI_PROVIDER=grok|ollama|openai|gemini and configure GROK_API_KEY or OLLAMA_API_KEY or OPENAI_API_KEY or GEMINI_API_KEY",
-        details: {
-          hasGrokKey: Boolean(process.env.GROK_API_KEY),
-          hasOllamaKey: Boolean(process.env.OLLAMA_API_KEY),
-          hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
-          hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-          aiProvider: provider || "(auto)",
-          note: "Server now loads keys from .env at startup. Restart dev server after .env changes.",
-        },
-      });
+    const scans: Array<DetectionResponse & { application_id: string; stored_file: string }> = [];
+
+    for (const [index, file] of files.entries()) {
+      // Create a unique id for this individual image within the request.
+      const uploadedAt = new Date().toISOString();
+      const datePrefix = uploadedAt.slice(0, 10);
+
+      const fileApplicationId = `${requestApplicationId}_${index}_${crypto.randomUUID().slice(0, 6)}`;
+      const safeOriginalName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const finalFileName = `${datePrefix}_${fileApplicationId}_${safeOriginalName || file.filename}`;
+      const finalPath = path.join(uploadDir, finalFileName);
+
+      fs.renameSync(file.path, finalPath);
+
+      const uploadRecord: UploadRecord = {
+        applicationId: fileApplicationId,
+        uploadedAt,
+        filePath: finalPath,
+        fileName: finalFileName,
+        originalName: file.originalname,
+        mimeType: file.mimetype || "application/octet-stream",
+        size: file.size,
+      };
+
+      const existing = readUploadIndex();
+      saveUploadIndex([uploadRecord, ...existing].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt)));
+
+      const mimeType = file.mimetype || "image/jpeg";
+      const base64Image = fs.readFileSync(finalPath).toString("base64");
+
+      // Call the selected provider for this image, returning the normalized JSON contract.
+      let result: DetectionResponse;
+      if (provider === "grok" || (!provider && process.env.GROK_API_KEY)) {
+        result = await scanWithGrok(base64Image, mimeType, { requestId, applicationId: fileApplicationId });
+      } else if (provider === "ollama" || (!provider && process.env.OLLAMA_API_KEY)) {
+        result = await scanWithOllama(base64Image, mimeType, { requestId, applicationId: fileApplicationId });
+      } else if (provider === "openai" || (!provider && process.env.OPENAI_API_KEY)) {
+        result = await scanWithOpenAI(base64Image, mimeType, { requestId, applicationId: fileApplicationId });
+      } else if (provider === "gemini" || (!provider && process.env.GEMINI_API_KEY)) {
+        result = await scanWithGemini(base64Image, mimeType, { requestId, applicationId: fileApplicationId });
+      } else {
+        return res.status(500).json({
+          error:
+            "No AI provider configured. Set AI_PROVIDER=grok|ollama|openai|gemini and configure GROK_API_KEY or OLLAMA_API_KEY or OPENAI_API_KEY or GEMINI_API_KEY",
+          details: {
+            hasGrokKey: Boolean(process.env.GROK_API_KEY),
+            hasOllamaKey: Boolean(process.env.OLLAMA_API_KEY),
+            hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
+            hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+            aiProvider: provider || "(auto)",
+            note: "Server now loads keys from .env at startup. Restart dev server after .env changes.",
+          },
+        });
+      }
+
+      scans.push({ ...result, application_id: fileApplicationId, stored_file: finalFileName });
     }
-    return res.json({ ...result, application_id: applicationId, stored_file: finalFileName });
+
+    // Backward compatible response for single file uploads.
+    if (scans.length === 1) return res.json(scans[0]);
+    return res.json({ scans });
   } catch (error) {
     const message = error instanceof Error ? error.message : "scan failed";
     return res.status(502).json({ error: message });
@@ -571,13 +618,72 @@ app.post("/api/scan", upload.single("image"), async (req, res) => {
 });
 
 app.get("/api/uploads", (_req, res) => {
+  // Returns the persisted upload metadata sorted newest-first.
   const records = readUploadIndex().sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   res.json(records);
 });
 
+/**
+ * POST `/api/confirm-scan`
+ *
+ * Purpose:
+ * - Update local inventory (`data/inventory.json`) using the model's
+ *   `aggregated_items` from one scan or many scans.
+ *
+ * How it works:
+ * - Each aggregated item is matched to an inventory row by:
+ *   `product_name` -> inventory `name`, and `brand` -> inventory `brand`
+ * - When there's a match, `currentStock` is increased by `quantity`.
+ *
+ * Input formats supported:
+ * - a single scan object (as returned from `/api/scan` when uploading 1 image)
+ * - `{ scans: [...] }` when uploading multiple images
+ */
 app.post("/api/confirm-scan", (req, res) => {
   const items = readInventory();
-  const aggregated = (req.body?.aggregated_items ?? []) as DetectionResponse["aggregated_items"];
+  const body = req.body as unknown;
+  const rawScans: unknown[] = Array.isArray(body)
+    ? body
+    : typeof body === "object" && body && "scans" in (body as { scans?: unknown })
+      ? ((body as { scans?: unknown })?.scans as unknown[]) ?? []
+      : [body];
+
+  const aggregatedItems: DetectionResponse["aggregated_items"] = [];
+  for (const scan of rawScans) {
+    if (scan && typeof scan === "object" && "aggregated_items" in (scan as { aggregated_items?: unknown })) {
+      const ai = (scan as { aggregated_items?: unknown }).aggregated_items;
+      if (Array.isArray(ai)) aggregatedItems.push(...(ai as DetectionResponse["aggregated_items"]));
+    }
+  }
+
+  /**
+   * Merge aggregated items by `(product_name, brand)` so multiple images
+   * contribute to the same inventory product.
+   *
+   * We also recompute `avg_confidence` using a weighted average based on quantity.
+   */
+  type Agg = DetectionResponse["aggregated_items"][number];
+  type AggMerged = Agg & { totalQuantity: number };
+  const mergedByKey = new Map<string, AggMerged>();
+  for (const hit of aggregatedItems) {
+    const key = `${hit.product_name}::${hit.brand}`;
+    const existing = mergedByKey.get(key);
+    if (!existing) {
+      mergedByKey.set(key, { ...hit, totalQuantity: hit.quantity });
+      continue;
+    }
+    const nextTotal = existing.totalQuantity + hit.quantity;
+    const weightedAvg = (existing.avg_confidence * existing.totalQuantity + hit.avg_confidence * hit.quantity) / nextTotal;
+    mergedByKey.set(key, {
+      product_name: existing.product_name,
+      brand: existing.brand,
+      quantity: existing.quantity + hit.quantity,
+      avg_confidence: weightedAvg,
+      totalQuantity: nextTotal,
+    });
+  }
+  const aggregated = Array.from(mergedByKey.values()).map(({ totalQuantity: _t, ...rest }) => rest as Agg);
+
   const updated = items.map((item) => {
     const hit = aggregated.find((x) => x.product_name === item.name && x.brand === item.brand);
     if (!hit) return item;
@@ -589,27 +695,6 @@ app.post("/api/confirm-scan", (req, res) => {
   });
   saveInventory(updated);
   res.json({ ok: true, inventory: updated });
-});
-
-app.put("/api/inventory/:id", (req, res) => {
-  const items = readInventory();
-  const next = items.map((x) => (x.id === req.params.id ? { ...x, ...req.body, updatedAt: new Date().toISOString() } : x));
-  saveInventory(next);
-  res.json({ ok: true });
-});
-
-app.get("/api/alerts", (_req, res) => {
-  res.json(generateLowStockAlerts(readInventory()));
-});
-
-app.get("/api/reorder", (_req, res) => {
-  res.json(generateReorderSuggestions(readInventory()));
-});
-
-app.get("/api/export/text", (_req, res) => {
-  const reorder = generateReorderSuggestions(readInventory());
-  const lines = reorder.map((x) => `- ${x.name} (${x.brand}): stock ${x.currentStock}, reorder ${x.suggestedOrderQty}`);
-  res.type("text/plain").send(["Reorder List", ...lines].join("\n"));
 });
 
 const port = Number(process.env.PORT ?? 3000);

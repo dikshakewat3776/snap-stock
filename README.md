@@ -32,22 +32,14 @@ Pure Node.js + Express web app for shelf-image scanning, inventory updates, aler
 ## Features
 - Upload shelf image and run AI detection (OpenAI or Gemini)
 - Confirm scan and apply stock updates
-- View inventory
-- View low-stock alerts
-- View reorder suggestions
-- Export reorder list as text
+- Run AI detection and confirm scans
 - Request/response file logging (internal + external API calls)
 
 ## API endpoints
 - `GET /api/health`
-- `GET /api/inventory`
-- `POST /api/scan` (multipart: `image`)
+- `POST /api/scan` (multipart: `image` up to 10 files)
 - `GET /api/uploads`
 - `POST /api/confirm-scan`
-- `PUT /api/inventory/:id`
-- `GET /api/alerts`
-- `GET /api/reorder`
-- `GET /api/export/text`
 
 ## Data and logs
 - Inventory: `data/inventory.json`
@@ -158,66 +150,40 @@ npm test
 
 # Flow
 
-## 1) First health check
-
-Run from project root:
+## 1) Start the server
 
 ```bash
-npm run typecheck
-npm test -- --runInBand
+npm run dev
 ```
 
-If both pass, business logic is mostly fine and issue is likely runtime/device/config related.
+Your web portal is available at `http://localhost:${PORT}` (or whatever `PORT` you set).
 
-## 2) Start app safely
+## 2) End-to-end runtime flow
 
-```bash
-npm run start
-```
+1. The browser loads `public/index.html`
+2. User selects `1..10` shelf images and clicks `Scan`
+3. Browser calls `POST /api/scan` with multipart field name `image`
+4. Server:
+   1. saves each uploaded image to `uploads/`
+   2. calls the configured AI provider (via `AI_PROVIDER` + the relevant API key)
+   3. returns detection JSON back to the browser
+5. User clicks `Confirm Scan`
+6. Browser calls `POST /api/confirm-scan` with the scan payload
+7. Server updates `data/inventory.json` using `aggregated_items` (matched by `product_name` + `brand`)
 
-## 3) End-to-end runtime flow
+## 3) Where to debug by symptom
 
-1. `App.tsx` boots and calls `bootstrapApp()`
-2. `bootstrapApp()` initializes SQLite + seeds catalog if empty
-3. Home screen opens (`HomeScreen`)
-4. Tap **Scan Shelf** -> `ScanScreen`
-5. Camera capture -> `MockInferenceAdapter.detectProducts()`
-6. Detection result stored in Zustand (`useAppStore`)
-7. Navigate to `DetectionReviewScreen`
-8. Confirm -> `ConfirmDetectionsUseCase.execute()`
-9. Inventory updated in SQLite + sync_queue entry enqueued
-10. Alerts screen computes low-stock + reorder suggestions
+- Scan fails (provider error / rate limit / TLS):
+  - Check `logs/YYYY-MM-DD.log` for `external_error` entries
+- Scan returns invalid/empty JSON:
+  - Check `external_response` entries (preview) for provider output issues
+- Confirm doesn’t update inventory:
+  - Check `logs/YYYY-MM-DD.log` for `/api/confirm-scan` payload shape
 
-## 4) Where to debug by symptom
+## 4) Logs
 
-- App stuck on loading:
-  - Check `src/app/providers/bootstrap.ts`
-  - Check `src/infra/db/database.ts`
-- Camera not opening:
-  - Check `src/features/scan/screens/ScanScreen.tsx`
-  - Confirm camera permission was granted
-- Scan shows no detections:
-  - Check `src/infra/inference/MockInferenceAdapter.ts`
-  - Ensure captured image URI exists
-- Confirm button does not update stock:
-  - Check `src/domain/usecases/ConfirmDetectionsUseCase.ts`
-  - Check `src/data/repositories/InventoryRepository.ts`
-- Sync keeps failing:
-  - Check `src/infra/sync/SyncService.ts`
-  - Check `src/domain/services/syncBackoff.ts`
-- Low stock/reorder wrong:
-  - Check `src/domain/services/inventoryRules.ts`
-
-## 5) Practical logging (copy/paste)
-
-Use temporary logs, then remove after fixing:
-
-```ts
-console.log("[DEBUG] capture uri:", picture?.uri);
-console.log("[DEBUG] detection result:", JSON.stringify(result, null, 2));
-console.log("[DEBUG] inventory before update:", items);
-console.log("[DEBUG] sync queue item:", item);
-```
+- Daily logs are written to `logs/YYYY-MM-DD.log`
+- Requests are correlated via `x-request-id` and `x-application-id` headers
 
 ## 6) TypeScript quick cheat sheet
 
@@ -260,11 +226,3 @@ console.log("[DEBUG] sync queue item:", item);
 **Reference**
 
 - [TypeScript cheatsheets](https://www.typescriptlang.org/cheatsheets/) — printable PDFs from the TypeScript team.
-
-## 7) Fast recovery checklist
-
-1. Stop Metro
-2. `rm -rf package-lock.json node_modules/`
-3. `npm install`
-4. `npx expo start --clear`
-5. Re-run typecheck/tests
